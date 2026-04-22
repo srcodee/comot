@@ -13,6 +13,14 @@
 
 The tool supports interactive and non-interactive execution, multiple input sources, recursive discovery, repeatable regex patterns, and configurable output fields.
 
+## Responsible Use
+
+`comot` is intended for authorized security research, internal validation, debugging, and asset inspection on systems and resources you own or are explicitly permitted to assess.
+
+Do not use this tool against third-party systems, services, or data without prior authorization. The operator is solely responsible for ensuring that every use of `comot` complies with applicable laws, regulations, contractual obligations, and internal policies.
+
+The author and contributors accept no responsibility or liability for misuse, unauthorized activity, or any direct or indirect impact resulting from the use of this tool.
+
 ## Features
 
 - Interactive mode by default when no arguments are provided
