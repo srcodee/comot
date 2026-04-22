@@ -1,0 +1,9 @@
+JWT || eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9._-]+\.[A-Za-z0-9._-]+
+email || [A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}
+URL || https?://[^\s\"'<>]+
+internal API path || /api/[A-Za-z0-9_./?&=-]+
+JSON endpoint || https?://[^\s\"']+\.json(?:\?[^\s\"']*)?
+Swagger/OpenAPI spec || https?://[^\s\"']*(?:swagger|openapi)[^\s\"']*\.json(?:\?[^\s\"']*)?|/[A-Za-z0-9._/-]*(?:swagger|openapi)[A-Za-z0-9._/-]*\.json
+Swagger/OpenAPI path || "(?:/[^"\s{}]+)+":\s*\{
+GraphQL endpoint || https?://[^\s\"']*(?:graphql|gql)[^\s\"']*|/[A-Za-z0-9/_-]*(?:graphql|gql)[A-Za-z0-9/_-]*
+API key-like string || (?i)(?:api[_-]?key|token|secret)[\"'\s:=]+[A-Za-z0-9_\-]{16,}

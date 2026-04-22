@@ -1,0 +1,10 @@
+comot
+comot-*.csv
+comot-*.json
+comot-*.txt
+progress.log
+result.json
+test.json
+*.log
+*.out
+tmp/
