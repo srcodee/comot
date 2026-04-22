@@ -55,7 +55,11 @@ Available format fields:
   line
   status
   content_type
-  match`,
+  match
+
+Built-in pattern file:
+  generated on first run at ~/.comot.data/patterns.txt
+  local overrides also checked at ./.comot.data/patterns.txt`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, cfg)
 		},

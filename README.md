@@ -172,9 +172,7 @@ Swagger/OpenAPI path || "(?:/[^"\s{}]+)+":\s*\{
 Lookup order:
 
 - local `.comot.data/patterns.txt`
-- parent `../.comot.data/patterns.txt`
 - user-scoped `~/.comot.data/patterns.txt`
-- executable-adjacent `.comot.data/patterns.txt`
 - embedded built-in set
 
 If no external pattern file exists, `comot` loads the embedded built-in set and writes the default generated file to `~/.comot.data/patterns.txt` automatically.
