@@ -144,7 +144,15 @@ Patterns can be repeated:
 
 ### Built-In Patterns
 
-Built-in patterns are defined in:
+Built-in patterns are bundled with the binary by default.
+
+On the first run, `comot` creates a user-scoped pattern file at:
+
+- `~/.comot.data/patterns.txt`
+
+That generated file becomes the primary source for built-in pattern definitions on subsequent runs. You can edit it directly to add, remove, or customize local built-in patterns.
+
+For source-based or workspace-local runs, `comot` also checks:
 
 - [patterns.txt](\\?\UNC\wsl.localhost\kali-linux\home\xcode\tools\comot\.comot.data\patterns.txt)
 
@@ -160,6 +168,16 @@ Example:
 JSON endpoint || https?://[^\s\"']+\.json(?:\?[^\s\"']*)?
 Swagger/OpenAPI path || "(?:/[^"\s{}]+)+":\s*\{
 ```
+
+Lookup order:
+
+- local `.comot.data/patterns.txt`
+- parent `../.comot.data/patterns.txt`
+- user-scoped `~/.comot.data/patterns.txt`
+- executable-adjacent `.comot.data/patterns.txt`
+- embedded built-in set
+
+If no external pattern file exists, `comot` loads the embedded built-in set and writes the default generated file to `~/.comot.data/patterns.txt` automatically.
 
 Use built-in patterns directly:
 
