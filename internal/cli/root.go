@@ -48,14 +48,14 @@ Available format fields:
   resource_url
   discovered_from
   matched_value
+  context
   pattern
   pattern_name
   pattern_source
-  url
+  resource_kind
   line
   status
   content_type
-  match
 
 Built-in pattern file:
   generated on first run at ~/.comot.data/patterns.txt

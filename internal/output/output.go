@@ -137,9 +137,9 @@ func colorize(field, value string) string {
 	switch field {
 	case "target_url":
 		color = ansiBlue
-	case "resource_url", "url":
+	case "resource_url":
 		color = ansiAmber
-	case "matched_value", "match":
+	case "matched_value":
 		color = ansiGreen
 	case "pattern", "pattern_name", "pattern_source":
 		color = ansiPink
@@ -199,18 +199,18 @@ func fieldValue(result model.ScanResult, field string) string {
 		return result.PatternName
 	case "pattern_source":
 		return result.PatternSource
-	case "match":
-		return result.MatchedValue
 	case "matched_value":
 		return result.MatchedValue
+	case "context":
+		return result.Context
 	case "target_url":
 		return result.TargetURL
 	case "resource_url":
 		return result.ResourceURL
+	case "resource_kind":
+		return result.ResourceKind
 	case "discovered_from":
 		return result.DiscoveredFrom
-	case "url":
-		return result.URL
 	case "line":
 		return strconv.Itoa(result.Line)
 	case "status":

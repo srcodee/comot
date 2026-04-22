@@ -15,12 +15,12 @@ var AllowedFields = map[string]struct{}{
 	"pattern":         {},
 	"pattern_name":    {},
 	"pattern_source":  {},
-	"match":           {},
 	"matched_value":   {},
+	"context":         {},
 	"target_url":      {},
 	"resource_url":    {},
+	"resource_kind":   {},
 	"discovered_from": {},
-	"url":             {},
 	"line":            {},
 	"status":          {},
 	"content_type":    {},
@@ -72,10 +72,11 @@ type ScanResult struct {
 	PatternName    string `json:"pattern_name,omitempty"`
 	PatternSource  string `json:"pattern_source"`
 	MatchedValue   string `json:"matched_value"`
+	Context        string `json:"context,omitempty"`
 	TargetURL      string `json:"target_url"`
 	ResourceURL    string `json:"resource_url"`
+	ResourceKind   string `json:"resource_kind,omitempty"`
 	DiscoveredFrom string `json:"discovered_from,omitempty"`
-	URL            string `json:"url"`
 	Line           int    `json:"line"`
 	Status         int    `json:"status"`
 	ContentType    string `json:"content_type"`

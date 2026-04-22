@@ -257,11 +257,11 @@ Available fields:
 - `target_url`
 - `resource_url`
 - `discovered_from`
-- `url`
+- `resource_kind`
+- `context`
 - `line`
 - `status`
 - `content_type`
-- `match`
 
 Default field order:
 
@@ -294,6 +294,12 @@ Custom field order:
 
 - `matched_value`
   The actual matched string.
+
+- `resource_kind`
+  The detected type of the scanned resource, such as `html`, `js`, `json`, or `xml`.
+
+- `context`
+  A source snippet surrounding the matched value.
 
 ## Flags
 
