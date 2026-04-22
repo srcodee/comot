@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 type Writer struct {

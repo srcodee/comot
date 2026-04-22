@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 const dataFile = "patterns.txt"

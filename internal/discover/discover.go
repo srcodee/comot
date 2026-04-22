@@ -9,7 +9,7 @@ import (
 
 	"github.com/PuerkitoBio/goquery"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 var skipExtensions = map[string]struct{}{

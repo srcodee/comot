@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 func TestCompleteWithPrompterSingleURLFlow(t *testing.T) {

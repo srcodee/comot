@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 type compiledPattern struct {

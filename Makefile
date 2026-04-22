@@ -9,7 +9,7 @@ unit:
 	go test ./...
 
 integration: build
-	./scripts/test.sh
+	bash ./scripts/test.sh
 
 test:
-	./scripts/test.sh
+	bash ./scripts/test.sh

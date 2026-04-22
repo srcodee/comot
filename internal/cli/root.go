@@ -12,14 +12,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"comot/internal/discover"
-	"comot/internal/fetch"
-	"comot/internal/interactive"
-	"comot/internal/model"
-	"comot/internal/output"
-	"comot/internal/patterns"
-	"comot/internal/progress"
-	"comot/internal/scan"
+	"github.com/srcodee/comot/internal/discover"
+	"github.com/srcodee/comot/internal/fetch"
+	"github.com/srcodee/comot/internal/interactive"
+	"github.com/srcodee/comot/internal/model"
+	"github.com/srcodee/comot/internal/output"
+	"github.com/srcodee/comot/internal/patterns"
+	"github.com/srcodee/comot/internal/progress"
+	"github.com/srcodee/comot/internal/scan"
 )
 
 type queueItem struct {

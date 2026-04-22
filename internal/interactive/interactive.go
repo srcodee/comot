@@ -8,7 +8,7 @@ import (
 
 	"github.com/AlecAivazis/survey/v2"
 
-	"comot/internal/model"
+	"github.com/srcodee/comot/internal/model"
 )
 
 const scriptedEnv = "COMOT_SCRIPTED_PROMPTS"

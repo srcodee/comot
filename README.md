@@ -32,9 +32,17 @@ The tool supports interactive and non-interactive execution, multiple input sour
 
 - Go 1.21 or newer
 
-### Build
+### Install
 
 ```bash
+go install github.com/srcodee/comot/cmd/comot@latest
+```
+
+### Build From Source
+
+```bash
+git clone git@github.com:srcodee/comot.git
+cd comot
 go mod tidy
 go build -o comot ./cmd/comot
 ```

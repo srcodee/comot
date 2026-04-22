@@ -1,4 +1,4 @@
-module comot
+module github.com/srcodee/comot
 
 go 1.21
 
