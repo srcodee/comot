@@ -63,6 +63,46 @@ func TestCompleteWithPrompterListFlowDoesNotRequireURL(t *testing.T) {
 	}
 }
 
+func TestCompleteWithPrompterHistoryFlowDoesNotRequireURL(t *testing.T) {
+	root := t.TempDir()
+	childA := root + "/scan-a"
+	childB := root + "/scan-b"
+	if err := os.MkdirAll(childA, 0o755); err != nil {
+		t.Fatalf("mkdir childA: %v", err)
+	}
+	if err := os.MkdirAll(childB, 0o755); err != nil {
+		t.Fatalf("mkdir childB: %v", err)
+	}
+	if err := os.WriteFile(childA+"/index.txt", []byte(""), 0o644); err != nil {
+		t.Fatalf("write childA index: %v", err)
+	}
+	if err := os.WriteFile(childB+"/index.txt", []byte(""), 0o644); err != nil {
+		t.Fatalf("write childB index: %v", err)
+	}
+
+	cfg := model.Config{HistoryDir: root}
+	builtins := []model.PatternDefinition{
+		{Name: "URL", Regex: `https?://[^\s"'<>]+`},
+	}
+
+	result, err := CompleteWithPrompter(cfg, builtins, scriptedPrompter{
+		answers: ScriptedAnswers{
+			HistoryDirs:  []string{"[all]"},
+			BuiltinNames: []string{"URL"},
+			OutputType:   model.OutputPlain,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CompleteWithPrompter returned error: %v", err)
+	}
+	if result.URL != "" {
+		t.Fatalf("expected URL to stay empty for history flow, got %q", result.URL)
+	}
+	if got, want := len(result.HistoryDirs), 2; got != want {
+		t.Fatalf("unexpected history dirs len: got %d want %d", got, want)
+	}
+}
+
 func TestNewPrompterFromEnv(t *testing.T) {
 	t.Setenv(scriptedEnv, `{"builtin_names":["email"],"output_type":"plain"}`)
 	prompter, err := newPrompterFromEnv()

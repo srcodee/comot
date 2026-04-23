@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/AlecAivazis/survey/v2"
 
 	"github.com/srcodee/comot/internal/model"
+	"github.com/srcodee/comot/internal/save"
 )
 
 const scriptedEnv = "COMOT_SCRIPTED_PROMPTS"
@@ -21,6 +23,7 @@ type Prompter interface {
 
 type ScriptedAnswers struct {
 	TargetURL    string   `json:"target_url"`
+	HistoryDirs  []string `json:"history_dirs"`
 	BuiltinNames []string `json:"builtin_names"`
 	CustomRegex  string   `json:"custom_regex"`
 	Format       string   `json:"format"`
@@ -42,7 +45,37 @@ func Complete(cfg model.Config, builtins []model.PatternDefinition) (model.Confi
 }
 
 func CompleteWithPrompter(cfg model.Config, builtins []model.PatternDefinition, prompter Prompter) (model.Config, error) {
-	if cfg.URL == "" && cfg.ListPath == "" && !cfg.UseStdin {
+	if cfg.HistoryDir != "" {
+		dirs, err := save.DiscoverHistoryDirs(cfg.HistoryDir)
+		if err != nil {
+			return cfg, err
+		}
+		if len(dirs) == 1 {
+			cfg.HistoryDirs = dirs
+		} else {
+			options := make([]string, 0, len(dirs)+1)
+			options = append(options, "[all]")
+			for _, dir := range dirs {
+				options = append(options, filepath.Base(dir)+" :: "+dir)
+			}
+			selected, err := prompter.MultiSelect("Select history folders:", options)
+			if err != nil {
+				return cfg, err
+			}
+			if len(selected) == 0 {
+				return cfg, fmt.Errorf("at least one history folder is required")
+			}
+			for _, item := range selected {
+				if item == "[all]" {
+					cfg.HistoryDirs = dirs
+					break
+				}
+				cfg.HistoryDirs = append(cfg.HistoryDirs, strings.SplitN(item, " :: ", 2)[1])
+			}
+		}
+	}
+
+	if cfg.URL == "" && cfg.ListPath == "" && !cfg.UseStdin && cfg.HistoryDir == "" {
 		value, err := prompter.Input("Target URL:", "", true)
 		if err != nil {
 			return cfg, err
@@ -199,28 +232,53 @@ func (p scriptedPrompter) Input(message, defaultValue string, required bool) (st
 }
 
 func (p scriptedPrompter) MultiSelect(message string, options []string) ([]string, error) {
-	if message != "Select built-in patterns:" {
-		return nil, fmt.Errorf("unsupported multi-select prompt %q", message)
-	}
-	if len(p.answers.BuiltinNames) == 0 {
-		return nil, nil
-	}
-
-	selected := make([]string, 0, len(p.answers.BuiltinNames))
-	for _, name := range p.answers.BuiltinNames {
-		matched := false
-		for _, option := range options {
-			if strings.HasPrefix(option, name+" ::") || option == name {
-				selected = append(selected, option)
-				matched = true
-				break
+	switch message {
+	case "Select built-in patterns:":
+		if len(p.answers.BuiltinNames) == 0 {
+			return nil, nil
+		}
+		selected := make([]string, 0, len(p.answers.BuiltinNames))
+		for _, name := range p.answers.BuiltinNames {
+			matched := false
+			for _, option := range options {
+				if strings.HasPrefix(option, name+" ::") || option == name {
+					selected = append(selected, option)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, fmt.Errorf("scripted built-in pattern %q not found", name)
 			}
 		}
-		if !matched {
-			return nil, fmt.Errorf("scripted built-in pattern %q not found", name)
+		return selected, nil
+	case "Select history folders:":
+		if len(p.answers.HistoryDirs) == 0 {
+			return []string{"[all]"}, nil
 		}
+		selected := make([]string, 0, len(p.answers.HistoryDirs))
+		for _, dir := range p.answers.HistoryDirs {
+			matched := false
+			for _, option := range options {
+				if option == "[all]" && dir == "[all]" {
+					selected = append(selected, option)
+					matched = true
+					break
+				}
+				if strings.HasSuffix(option, " :: "+dir) {
+					selected = append(selected, option)
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return nil, fmt.Errorf("scripted history folder %q not found", dir)
+			}
+		}
+		return selected, nil
+	default:
+		return nil, fmt.Errorf("unsupported multi-select prompt %q", message)
 	}
-	return selected, nil
 }
 
 func (p scriptedPrompter) Select(message string, options []string, defaultValue string) (string, error) {

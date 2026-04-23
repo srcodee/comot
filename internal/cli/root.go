@@ -19,14 +19,19 @@ import (
 	"github.com/srcodee/comot/internal/output"
 	"github.com/srcodee/comot/internal/patterns"
 	"github.com/srcodee/comot/internal/progress"
+	"github.com/srcodee/comot/internal/save"
 	"github.com/srcodee/comot/internal/scan"
+	"github.com/srcodee/comot/internal/target"
 )
 
 type queueItem struct {
 	URL            string
 	TargetURL      string
 	DiscoveredFrom string
+	Scope          target.Spec
 }
+
+const version = "v1.0.2"
 
 func NewRootCommand() *cobra.Command {
 	cfg := model.Config{
@@ -59,36 +64,64 @@ Available format fields:
 
 Built-in pattern file:
   generated on first run at ~/.comot.data/patterns.txt
-  local overrides also checked at ./.comot.data/patterns.txt`,
+  local overrides also checked at ./.comot.data/patterns.txt
+
+Wildcard scope notes:
+  if -u contains *, discovery is enabled automatically
+  discovered URLs are followed only when they still match the target scope
+  targets without a scheme try https first and then http
+
+Example:
+  comot -u '*.example.com/*' -p 'regex'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, cfg)
 		},
 		SilenceUsage: true,
 	}
 
-	cmd.Flags().StringVarP(&cfg.URL, "url", "u", "", "single target URL")
+	cmd.Flags().StringVarP(&cfg.URL, "url", "u", "", "target URL or wildcard scope")
+	cmd.Flags().BoolP("version", "v", false, "print version and exit")
 	cmd.Flags().StringVarP(&cfg.ListPath, "list", "l", "", "file containing URLs")
 	cmd.Flags().BoolVarP(&cfg.UseStdin, "stdin", "I", false, "read URLs from stdin")
+	cmd.Flags().StringVar(&cfg.HistoryDir, "history-dir", "", "scan previously saved resources from a --save-dir folder")
+	cmd.Flags().StringVar(&cfg.HistoryDir, "hd", "", "alias for --history-dir")
 	cmd.Flags().StringSliceVarP(&cfg.Patterns, "pattern", "p", nil, "regex pattern, repeatable")
 	cmd.Flags().StringSliceP("builtin", "b", nil, "built-in pattern name, repeatable")
 	cmd.Flags().StringP("format", "f", "pattern,pattern_name,resource_url,matched_value", "output fields in order")
 	cmd.Flags().StringVarP(&cfg.OutputType, "output", "o", model.OutputPlain, "export target: plain|json|csv for auto file, or filename/path like result.csv; terminal stays plain")
+	cmd.Flags().StringVar(&cfg.OutputDir, "output-dir", "", "directory for auto-named export files")
+	cmd.Flags().StringVar(&cfg.SaveDir, "save-dir", "", "directory for saving fetched resource bodies; accepts dir, scope:dir, or full:dir")
+	cmd.Flags().StringVar(&cfg.SaveDir, "sd", "", "alias for --save-dir")
+	cmd.Flags().StringSliceVar(&cfg.OutScope, "out-scope", nil, "exclude discovered URLs by category or wildcard pattern, e.g. images,css,video or *.svg.*.img")
+	cmd.Flags().StringSliceVar(&cfg.OutScope, "os", nil, "alias for --out-scope")
 	cmd.Flags().DurationVarP(&cfg.Timeout, "timeout", "t", 15*time.Second, "HTTP timeout, e.g. 10s")
-	cmd.Flags().BoolVarP(&cfg.Discover, "discover", "d", false, "recursively discover and scan related resources until exhausted")
+	cmd.Flags().BoolVarP(&cfg.Discover, "discover", "d", false, "discover URLs from responses and recursively scan those still matching the target scope")
 	cmd.Flags().IntVarP(&cfg.MaxCrawl, "max-crawl", "m", 10000, "maximum number of resources to crawl when discovery is enabled")
 	cmd.Flags().BoolVarP(&cfg.DedupResults, "dedup", "D", true, "deduplicate identical results")
-	cmd.Flags().BoolVarP(&cfg.AllowOffDomain, "allow-off-domain", "a", false, "allow discovery outside the original host")
+	cmd.Flags().BoolVarP(&cfg.AllowOffDomain, "allow-off-domain", "a", false, "allow discovery outside the target scope")
 
 	return cmd
 }
 
 func run(cmd *cobra.Command, cfg model.Config) error {
+	showVersion, err := cmd.Flags().GetBool("version")
+	if err != nil {
+		return err
+	}
+	if showVersion {
+		_, err := fmt.Fprintln(os.Stdout, version)
+		return err
+	}
+
 	format, err := cmd.Flags().GetString("format")
 	if err != nil {
 		return err
 	}
 	cfg.Format, err = parseFormat(format)
 	if err != nil {
+		return err
+	}
+	if err := resolveSaveDir(&cfg); err != nil {
 		return err
 	}
 	if err := resolveOutput(&cfg, cmd.Flags().Changed("output")); err != nil {
@@ -124,23 +157,9 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 		}
 	}
 
-	urls, err := collectURLs(cfg)
-	if err != nil {
-		return err
-	}
-	if len(urls) == 0 {
-		return errors.New("no target URL provided")
-	}
 	if len(cfg.PatternDefs) == 0 {
 		return errors.New("no pattern provided")
 	}
-	if cfg.MaxCrawl <= 0 {
-		return errors.New("max-crawl must be greater than 0")
-	}
-
-	client := fetch.New(cfg.Timeout, cfg.MaxRedirects)
-	tracker := progress.New(os.Stderr, true)
-	defer tracker.Finish()
 
 	terminalWriter, err := output.NewWriter(os.Stdout, cfg.Format, model.OutputPlain, true, true)
 	if err != nil {
@@ -151,6 +170,9 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 	var exportWriter *output.Writer
 	var file *os.File
 	if cfg.OutputFile != "" {
+		if err := os.MkdirAll(filepath.Dir(cfg.OutputFile), 0o755); err != nil {
+			return fmt.Errorf("create output directory: %w", err)
+		}
 		file, err = os.Create(cfg.OutputFile)
 		if err != nil {
 			return fmt.Errorf("create output file: %w", err)
@@ -163,13 +185,59 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 		defer exportWriter.Close()
 	}
 
+	resourceSaver, err := save.New(cfg.SaveDir)
+	if err != nil {
+		return err
+	}
+	if resourceSaver != nil {
+		defer resourceSaver.Close()
+	}
+
+	outScope, err := discover.CompileOutScope(cfg.OutScope)
+	if err != nil {
+		return err
+	}
+
+	if strings.TrimSpace(cfg.HistoryDir) != "" {
+		if len(cfg.HistoryDirs) == 0 {
+			cfg.HistoryDirs = []string{cfg.HistoryDir}
+		}
+		return runHistoryScan(cfg, terminalWriter, exportWriter)
+	}
+
+	targets, err := collectURLs(cfg)
+	if err != nil {
+		return err
+	}
+	if len(targets) == 0 {
+		return errors.New("no target URL provided")
+	}
+	if cfg.MaxCrawl <= 0 {
+		return errors.New("max-crawl must be greater than 0")
+	}
+
+	client := fetch.New(cfg.Timeout, cfg.MaxRedirects)
+	tracker := progress.New(os.Stderr, true)
+	defer tracker.Finish()
+
 	seenResources := make(map[string]struct{})
-	queue := make([]queueItem, 0, len(urls))
-	for _, url := range urls {
-		queue = append(queue, queueItem{
-			URL:       url,
-			TargetURL: url,
-		})
+	queue := make([]queueItem, 0, len(targets))
+	autoDiscover := cfg.Discover
+	for _, raw := range targets {
+		spec, err := target.Parse(raw)
+		if err != nil {
+			return err
+		}
+		if spec.Wildcard {
+			autoDiscover = true
+		}
+		for _, seed := range spec.BootstrapSeeds {
+			queue = append(queue, queueItem{
+				URL:       seed,
+				TargetURL: spec.Raw,
+				Scope:     spec,
+			})
+		}
 	}
 	tracker.AddTotal(len(queue) - 1)
 
@@ -183,11 +251,17 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 		tracker.Start("fetch " + item.URL)
 		resource, err := client.FetchWithContext(item.URL, item.TargetURL, item.DiscoveredFrom)
 		if err != nil {
-			if item.DiscoveredFrom != "" || cfg.Discover {
+			if item.DiscoveredFrom != "" || autoDiscover {
 				tracker.Advance()
 				continue
 			}
 			return err
+		}
+
+		if resourceSaver != nil && shouldSaveResource(cfg.SaveMode, item.Scope, resource) {
+			if err := resourceSaver.Save(resource); err != nil {
+				return err
+			}
 		}
 
 		tracker.Start("scan " + resource.FinalURL)
@@ -205,9 +279,9 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 			}
 		}
 
-		if cfg.Discover {
+		if autoDiscover {
 			tracker.Start("discover " + resource.FinalURL)
-			related, err := discover.Related(resource, cfg.AllowOffDomain)
+			related, err := discover.Related(resource, item.Scope, outScope, cfg.AllowOffDomain, item.Scope.Wildcard)
 			if err != nil {
 				return err
 			}
@@ -222,12 +296,37 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 					URL:            child.URL,
 					TargetURL:      resource.TargetURL,
 					DiscoveredFrom: child.DiscoveredFrom,
+					Scope:          item.Scope,
 				})
 				tracker.AddTotal(1)
 			}
 		}
 
 		tracker.Advance()
+	}
+	return nil
+}
+
+func runHistoryScan(cfg model.Config, terminalWriter, exportWriter *output.Writer) error {
+	for _, dir := range cfg.HistoryDirs {
+		resources, err := save.LoadResources(dir)
+		if err != nil {
+			return err
+		}
+		for _, resource := range resources {
+			scanned, err := scan.Run(resource, cfg.PatternDefs, cfg.DedupResults)
+			if err != nil {
+				return err
+			}
+			if err := terminalWriter.WriteResults(scanned); err != nil {
+				return err
+			}
+			if exportWriter != nil {
+				if err := exportWriter.WriteResults(scanned); err != nil {
+					return err
+				}
+			}
+		}
 	}
 	return nil
 }
@@ -328,7 +427,7 @@ func shouldEnterInteractive(cmd *cobra.Command, cfg model.Config) bool {
 		return true
 	}
 
-	hasInputSource := cfg.URL != "" || cfg.ListPath != "" || cfg.UseStdin
+	hasInputSource := cfg.URL != "" || cfg.ListPath != "" || cfg.UseStdin || cfg.HistoryDir != ""
 	if !hasInputSource {
 		return false
 	}
@@ -341,7 +440,7 @@ func shouldEnterInteractive(cmd *cobra.Command, cfg model.Config) bool {
 }
 
 func resolveOutput(cfg *model.Config, changed bool) error {
-	if !changed {
+	if !changed && strings.TrimSpace(cfg.OutputDir) == "" {
 		cfg.OutputType = model.OutputPlain
 		cfg.OutputFile = ""
 		return nil
@@ -350,15 +449,19 @@ func resolveOutput(cfg *model.Config, changed bool) error {
 	raw := strings.TrimSpace(cfg.OutputType)
 	if raw == "" {
 		cfg.OutputType = model.OutputPlain
-		cfg.OutputFile = defaultOutputName(model.OutputPlain)
+		cfg.OutputFile = defaultOutputPath(model.OutputPlain, cfg.OutputDir)
 		return nil
 	}
 
 	switch raw {
 	case model.OutputPlain, model.OutputJSON, model.OutputCSV:
 		cfg.OutputType = raw
-		cfg.OutputFile = defaultOutputName(raw)
+		cfg.OutputFile = defaultOutputPath(raw, cfg.OutputDir)
 		return nil
+	}
+
+	if strings.TrimSpace(cfg.OutputDir) != "" {
+		return errors.New("output-dir cannot be combined with a custom output filename")
 	}
 
 	cfg.OutputFile = raw
@@ -372,6 +475,52 @@ func resolveOutput(cfg *model.Config, changed bool) error {
 		cfg.OutputType = model.OutputPlain
 	}
 	return nil
+}
+
+func resolveSaveDir(cfg *model.Config) error {
+	raw := strings.TrimSpace(cfg.SaveDir)
+	if raw == "" {
+		cfg.SaveMode = ""
+		return nil
+	}
+
+	mode := "scope"
+	dir := raw
+	if idx := strings.Index(raw, ":"); idx >= 0 {
+		prefix := strings.ToLower(strings.TrimSpace(raw[:idx]))
+		switch prefix {
+		case "scope", "full":
+			mode = prefix
+			dir = strings.TrimSpace(raw[idx+1:])
+		}
+	}
+	if dir == "" {
+		return errors.New("save-dir must include a folder path")
+	}
+
+	cfg.SaveDir = dir
+	cfg.SaveMode = mode
+	return nil
+}
+
+func shouldSaveResource(mode string, scope target.Spec, resource model.Resource) bool {
+	switch mode {
+	case "", "scope":
+		return scope.Matches(resource.FinalURL)
+	case "full":
+		return true
+	default:
+		return false
+	}
+}
+
+func defaultOutputPath(outputType string, dir string) string {
+	name := defaultOutputName(outputType)
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return name
+	}
+	return filepath.Join(dir, name)
 }
 
 func defaultOutputName(outputType string) string {

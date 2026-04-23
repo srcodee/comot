@@ -12,6 +12,10 @@ import (
 	"github.com/srcodee/comot/internal/model"
 )
 
+type ScopeMatcher interface {
+	MatchURL(candidate *url.URL) bool
+}
+
 var skipExtensions = map[string]struct{}{
 	".jpg": {}, ".jpeg": {}, ".png": {}, ".gif": {}, ".svg": {}, ".webp": {},
 	".mp4": {}, ".mov": {}, ".avi": {}, ".mp3": {}, ".wav": {}, ".woff": {},
@@ -26,7 +30,7 @@ var textDiscoveryPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`sourceMappingURL=([^\s"'<>]+)`),
 }
 
-func Related(base model.Resource, allowOffDomain bool) ([]model.DiscoveredResource, error) {
+func Related(base model.Resource, scope ScopeMatcher, outScope OutScopeMatcher, allowOffDomain bool, aggressive bool) ([]model.DiscoveredResource, error) {
 	baseURL, err := url.Parse(base.FinalURL)
 	if err != nil {
 		return nil, err
@@ -35,7 +39,7 @@ func Related(base model.Resource, allowOffDomain bool) ([]model.DiscoveredResour
 	seen := map[string]struct{}{}
 	related := make([]model.DiscoveredResource, 0)
 	add := func(raw string) {
-		addCandidate(baseURL, raw, allowOffDomain, seen, &related, base.FinalURL)
+		addCandidate(baseURL, raw, scope, outScope, allowOffDomain, aggressive, seen, &related, base.FinalURL)
 	}
 
 	if strings.Contains(strings.ToLower(base.ContentType), "html") {
@@ -93,7 +97,7 @@ func isTextDiscoverable(resource model.Resource) bool {
 	}
 }
 
-func addCandidate(baseURL *url.URL, raw string, allowOffDomain bool, seen map[string]struct{}, related *[]model.DiscoveredResource, discoveredFrom string) {
+func addCandidate(baseURL *url.URL, raw string, scope ScopeMatcher, outScope OutScopeMatcher, allowOffDomain bool, aggressive bool, seen map[string]struct{}, related *[]model.DiscoveredResource, discoveredFrom string) {
 	raw = normalizeCandidate(raw)
 	if raw == "" {
 		return
@@ -103,13 +107,16 @@ func addCandidate(baseURL *url.URL, raw string, allowOffDomain bool, seen map[st
 	if err != nil || abs.Scheme == "" || abs.Host == "" {
 		return
 	}
-	if !allowOffDomain && !sameHost(baseURL, abs) {
+	if !allowOffDomain && scope != nil && !scope.MatchURL(abs) {
+		return
+	}
+	if outScope.Matches(abs) {
 		return
 	}
 	if shouldSkip(abs.Path) {
 		return
 	}
-	if !isRelevant(abs.Path) && !looksStructured(abs.RawQuery) {
+	if !aggressive && !isRelevant(abs.Path) && !looksStructured(abs.RawQuery) {
 		return
 	}
 
@@ -131,10 +138,6 @@ func normalizeCandidate(raw string) string {
 	raw = strings.TrimSuffix(raw, `;`)
 	raw = strings.TrimSuffix(raw, `,`)
 	return raw
-}
-
-func sameHost(a, b *url.URL) bool {
-	return strings.EqualFold(a.Host, b.Host)
 }
 
 func shouldSkip(p string) bool {
