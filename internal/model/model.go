@@ -30,11 +30,17 @@ type Config struct {
 	URL            string
 	ListPath       string
 	UseStdin       bool
+	HistoryDir     string
+	HistoryDirs    []string
 	Patterns       []string
 	PatternDefs    []PatternDefinition
 	Format         []string
 	OutputType     string
 	OutputFile     string
+	OutputDir      string
+	SaveDir        string
+	SaveMode       string
+	OutScope       []string
 	Timeout        time.Duration
 	Discover       bool
 	DedupResults   bool
