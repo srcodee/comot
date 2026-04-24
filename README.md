@@ -91,10 +91,28 @@ File list:
 ./comot -l targets.txt -p "regex"
 ```
 
+Raw HTTP request list:
+
+```bash
+./comot -l requests.txt -p "regex"
+```
+
 Standard input:
 
 ```bash
 cat targets.txt | ./comot --stdin -p "regex"
+```
+
+Raw HTTP request from stdin:
+
+```bash
+cat request.txt | ./comot --stdin -p "regex"
+```
+
+Raw request seed with explicit wildcard scope:
+
+```bash
+./comot -u 'example.com/*' -l request.txt -d -p "regex"
 ```
 
 Saved history:
@@ -138,10 +156,10 @@ Terminal output remains plain even when export is enabled.
   Target URL or wildcard scope.
 
 - `-l`, `--list`
-  File containing one target URL per line.
+  File containing one target URL per line or raw HTTP request blocks.
 
 - `-I`, `--stdin`
-  Read target URLs from standard input.
+  Read target URLs or raw HTTP request blocks from standard input.
 
 - `--history-dir`, `--hd`
   Scan previously saved resources from a `--save-dir` folder without refetching.
@@ -198,6 +216,32 @@ Use built-in patterns directly:
 ```
 
 ## Discovery Behavior
+
+## Raw HTTP Request Input
+
+`-l` and `--stdin` also accept raw HTTP request blocks in addition to plain URLs. This is useful when you want to preserve headers such as `Cookie`, `User-Agent`, or `Accept`.
+
+Example request block:
+
+```http
+GET /home HTTP/1.1
+Host: example.com
+User-Agent: Mozilla/5.0
+Cookie: session=abc123
+Accept: text/html
+```
+
+Behavior:
+
+- the request line is parsed into method and target path
+- the `Host` header is used to build the fetch URL
+- if the target is already absolute, that absolute URL is used directly
+- request headers are forwarded during fetch
+- plain URL lists remain supported unchanged
+
+When no scheme is present in the raw request target, `comot` defaults to `https`, except for local hosts such as `localhost`, `127.0.0.1`, or explicit `:80`, which default to `http`
+
+If `-u` is provided together with `-l` or `--stdin`, `-u` is treated as the crawl scope for discovery and the raw request input becomes the seed request. This lets you start with a request that includes custom headers or cookies while still restricting `-d` to a wildcard target such as `example.com/*`.
 
 Without `-d`, `comot` scans only the primary response body.
 

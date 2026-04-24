@@ -2,11 +2,15 @@ package cli
 
 import (
 	"bufio"
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -25,6 +29,7 @@ import (
 )
 
 type queueItem struct {
+	Request        model.RequestSpec
 	URL            string
 	TargetURL      string
 	DiscoveredFrom string
@@ -72,7 +77,8 @@ Wildcard scope notes:
   targets without a scheme try https first and then http
 
 Example:
-  comot -u '*.example.com/*' -p 'regex'`,
+  comot -u '*.example.com/*' -p 'regex'
+  comot -u 'example.com/*' -l requests.txt -d -p 'regex'`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return run(cmd, cfg)
 		},
@@ -81,8 +87,8 @@ Example:
 
 	cmd.Flags().StringVarP(&cfg.URL, "url", "u", "", "target URL or wildcard scope")
 	cmd.Flags().BoolP("version", "v", false, "print version and exit")
-	cmd.Flags().StringVarP(&cfg.ListPath, "list", "l", "", "file containing URLs")
-	cmd.Flags().BoolVarP(&cfg.UseStdin, "stdin", "I", false, "read URLs from stdin")
+	cmd.Flags().StringVarP(&cfg.ListPath, "list", "l", "", "file containing URLs or raw HTTP request blocks")
+	cmd.Flags().BoolVarP(&cfg.UseStdin, "stdin", "I", false, "read URLs or raw HTTP request blocks from stdin")
 	cmd.Flags().StringVar(&cfg.HistoryDir, "history-dir", "", "scan previously saved resources from a --save-dir folder")
 	cmd.Flags().StringVar(&cfg.HistoryDir, "hd", "", "alias for --history-dir")
 	cmd.Flags().StringSliceVarP(&cfg.Patterns, "pattern", "p", nil, "regex pattern, repeatable")
@@ -205,7 +211,7 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 		return runHistoryScan(cfg, terminalWriter, exportWriter)
 	}
 
-	targets, err := collectURLs(cfg)
+	targets, err := collectRequests(cfg)
 	if err != nil {
 		return err
 	}
@@ -223,16 +229,46 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 	seenResources := make(map[string]struct{})
 	queue := make([]queueItem, 0, len(targets))
 	autoDiscover := cfg.Discover
-	for _, raw := range targets {
-		spec, err := target.Parse(raw)
+	scopeOverride := strings.TrimSpace(cfg.URL)
+	if cfg.ListPath == "" && !cfg.UseStdin {
+		scopeOverride = ""
+	}
+	for _, reqSpec := range targets {
+		scopeTarget := reqSpec.URL
+		if scopeOverride != "" {
+			scopeTarget = scopeOverride
+		}
+
+		spec, err := target.Parse(scopeTarget)
 		if err != nil {
 			return err
 		}
 		if spec.Wildcard {
 			autoDiscover = true
 		}
-		for _, seed := range spec.BootstrapSeeds {
+
+		if scopeOverride != "" {
+			current := reqSpec
+			if current.Method == "" {
+				current.Method = http.MethodGet
+			}
 			queue = append(queue, queueItem{
+				Request:   current,
+				URL:       current.URL,
+				TargetURL: spec.Raw,
+				Scope:     spec,
+			})
+			continue
+		}
+
+		for _, seed := range spec.BootstrapSeeds {
+			current := reqSpec
+			current.URL = seed
+			if current.Method == "" {
+				current.Method = http.MethodGet
+			}
+			queue = append(queue, queueItem{
+				Request:   current,
 				URL:       seed,
 				TargetURL: spec.Raw,
 				Scope:     spec,
@@ -249,7 +285,7 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 		seenResources[item.URL] = struct{}{}
 
 		tracker.Start("fetch " + item.URL)
-		resource, err := client.FetchWithContext(item.URL, item.TargetURL, item.DiscoveredFrom)
+		resource, err := client.FetchWithSpec(item.Request, item.TargetURL, item.DiscoveredFrom)
 		if err != nil {
 			if item.DiscoveredFrom != "" || autoDiscover {
 				tracker.Advance()
@@ -293,6 +329,7 @@ func run(cmd *cobra.Command, cfg model.Config) error {
 					break
 				}
 				queue = append(queue, queueItem{
+					Request:        inheritedRequest(item.Request, child.URL),
 					URL:            child.URL,
 					TargetURL:      resource.TargetURL,
 					DiscoveredFrom: child.DiscoveredFrom,
@@ -331,33 +368,36 @@ func runHistoryScan(cfg model.Config, terminalWriter, exportWriter *output.Write
 	return nil
 }
 
-func collectURLs(cfg model.Config) ([]string, error) {
+func collectRequests(cfg model.Config) ([]model.RequestSpec, error) {
 	seen := map[string]struct{}{}
-	var urls []string
-	add := func(raw string) {
-		raw = strings.TrimSpace(raw)
-		if raw == "" {
+	var requests []model.RequestSpec
+	add := func(spec model.RequestSpec) {
+		if strings.TrimSpace(spec.URL) == "" {
 			return
 		}
-		if _, ok := seen[raw]; ok {
+		key := spec.Method + "\x00" + spec.URL + "\x00" + canonicalHeaderKey(spec.Headers)
+		if _, ok := seen[key]; ok {
 			return
 		}
-		seen[raw] = struct{}{}
-		urls = append(urls, raw)
+		seen[key] = struct{}{}
+		requests = append(requests, spec)
 	}
 
-	if cfg.URL != "" {
-		add(cfg.URL)
+	if cfg.URL != "" && cfg.ListPath == "" && !cfg.UseStdin {
+		add(model.RequestSpec{Method: http.MethodGet, URL: strings.TrimSpace(cfg.URL)})
 	}
 
 	if cfg.ListPath != "" {
-		file, err := os.Open(cfg.ListPath)
+		file, err := os.ReadFile(cfg.ListPath)
 		if err != nil {
 			return nil, fmt.Errorf("open list file: %w", err)
 		}
-		defer file.Close()
-		if err := scanLines(file, add); err != nil {
+		specs, err := parseRequestSpecs(string(file))
+		if err != nil {
 			return nil, err
+		}
+		for _, spec := range specs {
+			add(spec)
 		}
 	}
 
@@ -369,20 +409,190 @@ func collectURLs(cfg model.Config) ([]string, error) {
 		if (info.Mode() & os.ModeCharDevice) != 0 {
 			return nil, errors.New("--stdin provided but no piped input detected")
 		}
-		if err := scanLines(os.Stdin, add); err != nil {
+		data, err := io.ReadAll(os.Stdin)
+		if err != nil {
 			return nil, err
+		}
+		specs, err := parseRequestSpecs(string(data))
+		if err != nil {
+			return nil, err
+		}
+		for _, spec := range specs {
+			add(spec)
 		}
 	}
 
-	return urls, nil
+	return requests, nil
 }
 
-func scanLines(r io.Reader, add func(string)) error {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		add(scanner.Text())
+func parseRequestSpecs(raw string) ([]model.RequestSpec, error) {
+	raw = strings.ReplaceAll(raw, "\r\n", "\n")
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
 	}
-	return scanner.Err()
+
+	lines := strings.Split(raw, "\n")
+	specs := make([]model.RequestSpec, 0, len(lines))
+	for i := 0; i < len(lines); {
+		line := strings.TrimSpace(lines[i])
+		if line == "" {
+			i++
+			continue
+		}
+
+		if !isRequestLine(line) {
+			specs = append(specs, model.RequestSpec{
+				Method: http.MethodGet,
+				URL:    line,
+			})
+			i++
+			continue
+		}
+
+		blockLines := []string{lines[i]}
+		i++
+
+		for i < len(lines) {
+			current := lines[i]
+			trimmed := strings.TrimSpace(current)
+			if trimmed == "" {
+				blockLines = append(blockLines, current)
+				i++
+				continue
+			}
+			if isRequestLine(trimmed) {
+				break
+			}
+			blockLines = append(blockLines, current)
+			i++
+		}
+
+		spec, err := parseRequestBlock(strings.Join(blockLines, "\n"))
+		if err != nil {
+			return nil, err
+		}
+		specs = append(specs, spec)
+	}
+	return specs, nil
+}
+
+func parseRequestBlock(block string) (model.RequestSpec, error) {
+	block = strings.TrimSpace(block)
+	if block == "" {
+		return model.RequestSpec{}, nil
+	}
+	if !isRequestLine(firstLine(block)) {
+		return model.RequestSpec{Method: http.MethodGet, URL: block}, nil
+	}
+
+	lines := strings.Split(block, "\n")
+	parts := strings.Fields(strings.TrimSpace(lines[0]))
+	if len(parts) < 2 {
+		return model.RequestSpec{}, fmt.Errorf("invalid request line %q", lines[0])
+	}
+
+	headers := make(http.Header)
+	bodyStart := len(lines)
+	for i := 1; i < len(lines); i++ {
+		line := lines[i]
+		if strings.TrimSpace(line) == "" {
+			bodyStart = i + 1
+			break
+		}
+		name, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		headers.Add(strings.TrimSpace(name), strings.TrimSpace(value))
+	}
+
+	rawURL, err := buildRawRequestURL(parts[1], headers.Get("Host"))
+	if err != nil {
+		return model.RequestSpec{}, err
+	}
+
+	var body []byte
+	if bodyStart < len(lines) {
+		body = []byte(strings.Join(lines[bodyStart:], "\n"))
+	}
+
+	return model.RequestSpec{
+		Method:  strings.ToUpper(parts[0]),
+		URL:     rawURL,
+		Headers: headers,
+		Body:    body,
+	}, nil
+}
+
+func firstLine(block string) string {
+	scanner := bufio.NewScanner(strings.NewReader(block))
+	if scanner.Scan() {
+		return strings.TrimSpace(scanner.Text())
+	}
+	return ""
+}
+
+func isRequestLine(line string) bool {
+	parts := strings.Fields(line)
+	return len(parts) >= 3 && strings.HasPrefix(strings.ToUpper(parts[2]), "HTTP/")
+}
+
+func buildRawRequestURL(target, host string) (string, error) {
+	if strings.HasPrefix(target, "http://") || strings.HasPrefix(target, "https://") {
+		return target, nil
+	}
+	host = strings.TrimSpace(host)
+	if host == "" {
+		return "", fmt.Errorf("raw request is missing Host header")
+	}
+	scheme := "https"
+	if strings.HasPrefix(host, "localhost:") || strings.HasPrefix(host, "127.0.0.1:") || strings.HasSuffix(host, ":80") {
+		scheme = "http"
+	}
+	u := &url.URL{Scheme: scheme, Host: host, Path: target}
+	if strings.Contains(target, "?") {
+		pathValue, queryValue, _ := strings.Cut(target, "?")
+		u.Path = pathValue
+		u.RawQuery = queryValue
+	}
+	return u.String(), nil
+}
+
+func canonicalHeaderKey(headers http.Header) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(headers))
+	for key := range headers {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var builder bytes.Buffer
+	for _, key := range keys {
+		values := append([]string(nil), headers[key]...)
+		sort.Strings(values)
+		builder.WriteString(key)
+		builder.WriteByte(':')
+		builder.WriteString(strings.Join(values, ","))
+		builder.WriteByte('\n')
+	}
+	return builder.String()
+}
+
+func inheritedRequest(parent model.RequestSpec, urlValue string) model.RequestSpec {
+	headers := make(http.Header)
+	for _, key := range []string{"User-Agent", "Accept", "Accept-Language", "Accept-Encoding", "Cookie"} {
+		if value := parent.Headers.Get(key); value != "" {
+			headers.Set(key, value)
+		}
+	}
+	return model.RequestSpec{
+		Method:  http.MethodGet,
+		URL:     urlValue,
+		Headers: headers,
+	}
 }
 
 func parseFormat(raw string) ([]string, error) {

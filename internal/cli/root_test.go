@@ -4,7 +4,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -204,6 +206,52 @@ func TestHistoryDirScansSavedResources(t *testing.T) {
 	}
 }
 
+func TestParseRequestSpecsKeepsPlainURLListsCompatible(t *testing.T) {
+	raw := "https://example.com/one\nhttps://example.com/two\n"
+
+	specs, err := parseRequestSpecs(raw)
+	if err != nil {
+		t.Fatalf("parseRequestSpecs returned error: %v", err)
+	}
+	if len(specs) != 2 {
+		t.Fatalf("expected 2 request specs, got %d", len(specs))
+	}
+	if specs[0].URL != "https://example.com/one" || specs[1].URL != "https://example.com/two" {
+		t.Fatalf("unexpected URLs: %#v", specs)
+	}
+	if specs[0].Method != http.MethodGet || specs[1].Method != http.MethodGet {
+		t.Fatalf("expected GET for plain URL specs, got %#v", specs)
+	}
+}
+
+func TestParseRequestSpecsParsesRawHTTPBlock(t *testing.T) {
+	raw := "POST /home HTTP/1.1\r\nHost: example.com\r\nUser-Agent: test-agent\r\nCookie: a=b\r\n\r\nhello=world"
+
+	specs, err := parseRequestSpecs(raw)
+	if err != nil {
+		t.Fatalf("parseRequestSpecs returned error: %v", err)
+	}
+	if len(specs) != 1 {
+		t.Fatalf("expected 1 request spec, got %d", len(specs))
+	}
+	spec := specs[0]
+	if spec.Method != http.MethodPost {
+		t.Fatalf("expected POST method, got %q", spec.Method)
+	}
+	if spec.URL != "https://example.com/home" {
+		t.Fatalf("expected https://example.com/home, got %q", spec.URL)
+	}
+	if spec.Headers.Get("User-Agent") != "test-agent" {
+		t.Fatalf("expected User-Agent header to be preserved")
+	}
+	if spec.Headers.Get("Cookie") != "a=b" {
+		t.Fatalf("expected Cookie header to be preserved")
+	}
+	if string(spec.Body) != "hello=world" {
+		t.Fatalf("expected body to be preserved, got %q", string(spec.Body))
+	}
+}
+
 func TestWildcardTargetHonorsOutScopeCategories(t *testing.T) {
 	var mu sync.Mutex
 	hits := map[string]int{}
@@ -237,6 +285,132 @@ func TestWildcardTargetHonorsOutScopeCategories(t *testing.T) {
 	}
 	if hits["/foo/app.js"] == 0 {
 		t.Fatalf("expected non-image resource to be fetched")
+	}
+}
+
+func TestListFileSupportsRawHTTPRequests(t *testing.T) {
+	var (
+		mu           sync.Mutex
+		gotMethod    string
+		gotUserAgent string
+		gotCookie    string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/home" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		gotMethod = r.Method
+		gotUserAgent = r.Header.Get("User-Agent")
+		gotCookie = r.Header.Get("Cookie")
+		mu.Unlock()
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "needle")
+	}))
+	defer server.Close()
+
+	parsedURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse returned error: %v", err)
+	}
+
+	listPath := filepath.Join(t.TempDir(), "requests.txt")
+	rawRequest := strings.Join([]string{
+		"GET /home HTTP/1.1",
+		"Host: " + parsedURL.Host,
+		"User-Agent: raw-client/1.0",
+		"Cookie: session=abc123",
+		"",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(rawRequest), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	if err := executeCommand(t, "-l", listPath, "-p", "needle"); err != nil {
+		t.Fatalf("execute command: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if gotMethod != http.MethodGet {
+		t.Fatalf("expected GET method, got %q", gotMethod)
+	}
+	if gotUserAgent != "raw-client/1.0" {
+		t.Fatalf("expected User-Agent header to be forwarded, got %q", gotUserAgent)
+	}
+	if gotCookie != "session=abc123" {
+		t.Fatalf("expected Cookie header to be forwarded, got %q", gotCookie)
+	}
+}
+
+func TestWildcardScopeCanDriveDiscoveryForRawRequestSeed(t *testing.T) {
+	var (
+		mu             sync.Mutex
+		hits           = map[string]int{}
+		childCookie    string
+		childUserAgent string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits[r.URL.Path]++
+		mu.Unlock()
+
+		switch r.URL.Path {
+		case "/home":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = io.WriteString(w, `<a href="/child">child</a>`)
+		case "/child":
+			mu.Lock()
+			childCookie = r.Header.Get("Cookie")
+			childUserAgent = r.Header.Get("User-Agent")
+			mu.Unlock()
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, `needle`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	parsedURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatalf("url.Parse returned error: %v", err)
+	}
+
+	listPath := filepath.Join(t.TempDir(), "raw.txt")
+	rawRequest := strings.Join([]string{
+		"GET /home HTTP/1.1",
+		"Host: " + parsedURL.Host,
+		"User-Agent: raw-client/1.0",
+		"Cookie: session=abc123",
+		"",
+	}, "\n")
+	if err := os.WriteFile(listPath, []byte(rawRequest), 0o644); err != nil {
+		t.Fatalf("WriteFile returned error: %v", err)
+	}
+
+	scope := strings.TrimPrefix(server.URL, "http://") + "/*"
+	if err := executeCommand(t, "-u", scope, "-l", listPath, "-d", "-p", "needle"); err != nil {
+		t.Fatalf("execute command: %v", err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if hits["/home"] == 0 {
+		t.Fatalf("expected raw request seed path to be fetched")
+	}
+	if hits["/child"] == 0 {
+		t.Fatalf("expected child path to be discovered under wildcard scope")
+	}
+	if hits["/"] != 0 {
+		t.Fatalf("did not expect wildcard scope bootstrap root to be fetched when raw request seed is provided")
+	}
+	if childCookie != "session=abc123" {
+		t.Fatalf("expected cookie to be inherited for discovered child, got %q", childCookie)
+	}
+	if childUserAgent != "raw-client/1.0" {
+		t.Fatalf("expected user-agent to be inherited for discovered child, got %q", childUserAgent)
 	}
 }
 
