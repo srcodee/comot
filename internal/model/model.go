@@ -50,6 +50,13 @@ type Config struct {
 	AllowOffDomain bool
 }
 
+type RequestSpec struct {
+	Method  string
+	URL     string
+	Headers http.Header
+	Body    []byte
+}
+
 type PatternDefinition struct {
 	Name        string `json:"name"`
 	Regex       string `json:"regex"`
@@ -58,6 +65,7 @@ type PatternDefinition struct {
 }
 
 type Resource struct {
+	Method      string
 	URL         string
 	FinalURL    string
 	TargetURL   string
