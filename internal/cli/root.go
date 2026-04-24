@@ -36,7 +36,7 @@ type queueItem struct {
 	Scope          target.Spec
 }
 
-const version = "v1.0.3"
+const version = "v1.0.4"
 
 func NewRootCommand() *cobra.Command {
 	cfg := model.Config{

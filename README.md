@@ -592,7 +592,7 @@ The unified test runner covers:
 
 - Recursive discovery can expand quickly on large documentation or asset-heavy sites. Use `--max-crawl` to control crawl volume.
 - Saved history folders can be rescanned later with `--history-dir` to try new regex patterns without touching the network again.
-- The current CLI version is `v1.0.3`.
+- The current CLI version is `v1.0.4`.
 - Built-in pattern data should remain available alongside the binary or in the working directory.
 - For Swagger and OpenAPI targets, the most relevant findings are often discovered inside linked spec files rather than in the initial HTML response.
 
